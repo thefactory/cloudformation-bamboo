@@ -1,0 +1,307 @@
+
+{
+  "AWSTemplateFormatVersion" : "2010-09-09",
+
+  "Description" : "Launches a Marathon LB stack",
+
+  "Parameters" : {
+    "InstanceType" : {
+      "Description" : "EC2 instance type",
+      "Type" : "String",
+      "Default" : "m1.small",
+      "AllowedValues" : [ "t1.micro","m1.small","m1.medium","m1.large","m1.xlarge","m2.xlarge","m2.2xlarge","m2.4xlarge","m3.xlarge","m3.2xlarge","c1.medium","c1.xlarge","cc1.4xlarge","cc2.8xlarge","cg1.4xlarge"],
+      "ConstraintDescription" : "must be a valid EC2 instance type."
+    },
+    "KeyName" : {
+      "Description" : "Existing EC2 KeyPair to be associated with all cluster instances for SSH access. For default AMIs, log in as the 'ubuntu' user.",
+      "Type" : "String"
+    },
+    "ClusterId" : {
+      "Description" : "Cluster identifier. Change this if you want to run multiple Bamboo clusters on the same ZK cluster.",
+      "Type": "String",
+      "Default": "mesos"
+    },
+    "MarathonUrl" : {
+      "Description" : "Marathon server URL (http[s]://<host>:<port>).",
+      "Type": "String"
+    },
+    "ExhibitorDiscoveryUrl" : {
+      "Description" : "Exhibitor URL that returns active ZooKeeper nodes ('getCluster') (e.g., http://<exhibitor_node>/exhibitor/v1/cluster/list)",
+      "Type" : "String"
+    },
+    "ZkClientSecurityGroup" : {
+      "Description" : "Security group ID for ZK clients (should grant access to ZK nodes)",
+      "Type" : "String"
+    },
+    "BambooDockerImage" : {
+      "Description" : "The bamboo Docker image (format: 'registry:port/repository:version')",
+      "Type" : "String",
+      "Default" : "thefactory/bamboo:0.2.4"
+    },    
+    "InstanceCount" : {
+      "Description" : "Number of bamboo nodes to launch",
+      "Type" : "Number",
+      "Default" : "1"
+    },
+    "Subnets" : {
+      "Description" : "List of VPC subnet IDs for the cluster. Note: must match the passed AvailabilityZones.",
+      "Type" : "CommaDelimitedList"
+    },  
+    "VpcId" : {
+      "Description" : "VPC associated with the provided subnets",
+      "Type" : "String"
+    },
+    "AdminSecurityGroup" : {
+      "Description" : "Existing security group that should be granted administrative access (e.g., 'sg-123456')",
+      "Type" : "String"
+    },
+    "AvailabilityZones": {
+      "Description" : "(Optional) If passed, only launch nodes in these AZs (e.g., 'us-east-1a,us-east-1b'). Note: these must match the passed Subnets.",
+      "Type" : "CommaDelimitedList",
+      "Default" : ""
+    }
+  },
+
+  "Conditions" : {
+    "UseAllAvailabilityZones" : {"Fn::Equals" : [{ "Fn::Join" : ["", {"Ref" : "AvailabilityZones"} ]}, ""]}
+  },
+
+  "Mappings" : {
+    "RegionMap" : {
+      "us-east-1" : {
+        "AMI" : "ami-f40bbe9c"
+      },
+      "us-west-1" : {
+        "AMI" : "ami-cfe2ea8a"
+      },
+      "us-west-2" : {
+        "AMI" : "ami-3fb1f20f"
+      },
+      "eu-west-1" : {
+        "AMI" : "ami-e0d27397"
+      },
+      "ap-southeast-1" : {
+        "AMI" : "ami-8a7057d8"
+      },
+      "ap-southeast-2" : {
+        "AMI" : "ami-d5c1a2ef"
+      },
+      "ap-northeast-1" : {
+        "AMI" : "ami-a7def7a6"
+      },
+      "sa-east-1" : {
+        "AMI" : "ami-070fa51a"
+      }
+    }
+  },
+
+  "Resources" : {
+
+    "IAMUser" : {
+      "Type" : "AWS::IAM::User",
+      "Properties" : {
+        "Policies" : [{
+          "PolicyName" : "IAMAccess",
+          "PolicyDocument" : {
+            "Statement" : [{
+              "Effect"    : "Allow",
+              "NotAction" : "iam:*",
+              "Resource"  : "*"
+            }]
+          }
+        }]
+      }
+    },
+
+    "HostKeys" : {
+      "Type" : "AWS::IAM::AccessKey",
+      "Properties" : {
+        "UserName" : { "Ref" : "IAMUser" }
+      }
+    },
+
+    "ServerGroup" : {
+      "Type" : "AWS::AutoScaling::AutoScalingGroup",
+      "UpdatePolicy" : {
+        "AutoScalingRollingUpdate" : {
+          "MaxBatchSize" : "1",
+          "MinInstancesInService" : "1",
+          "PauseTime" : "PT2M"
+        }
+      },
+      "Properties" : {
+        "AvailabilityZones" : {
+          "Fn::If" : [
+            "UseAllAvailabilityZones",
+            { "Fn::GetAZs": "" },
+            {"Ref" : "AvailabilityZones"}
+          ]
+        },
+        "LaunchConfigurationName" : { "Ref" : "LaunchConfig" },
+        "MinSize" : { "Ref" : "InstanceCount" },
+        "MaxSize" : 20,
+        "DesiredCapacity" : { "Ref" : "InstanceCount" },
+        "LoadBalancerNames" : [ { "Ref" : "ElasticLoadBalancer" } ],
+        "VPCZoneIdentifier" : { "Ref" : "Subnets" }
+      }
+    },
+
+    "LaunchConfig" : {
+      "Type" : "AWS::AutoScaling::LaunchConfiguration",
+      "Metadata" : {
+        "AWS::CloudFormation::Init" : {
+          "config": {
+
+            "files" : {
+
+              "/usr/local/bin/zk-list-nodes" : {
+                "content" : { "Fn::Join" : ["", [
+                  "#!/bin/bash -e\n",
+                  "curl -s {{zk_discovery_url}} | python -c '",
+                    "import sys, json;",
+                    "j=json.load(sys.stdin);",
+                    "servers=[\":\".join([s, str(j[\"port\"])]) for s in j[\"servers\"]];",
+                    "print \",\".join(servers)'"
+                ]]},
+                "context" : {
+                  "zk_discovery_url"  : { "Ref" : "ExhibitorDiscoveryUrl" }
+                },
+                "mode"    : "000755",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+
+              "/usr/local/bin/configure-bamboo" : {
+                "content" : { "Fn::Join" : ["\n", [
+                  "#!/bin/bash -e",
+                  "echo \"`/usr/local/bin/zk-list-nodes`\" > /etc/sv/bamboo/env/BAMBOO_ZK_HOST",
+                  "echo \"/{{cluster_id}}_bamboo\" > /etc/sv/bamboo/env/BAMBOO_ZK_PATH",
+                  "echo \"http://{{bamboo_lb}}\" > /etc/sv/bamboo/env/BAMBOO_ENDPOINT",
+                  "echo \"{{marathon_url}}\" | sed 's:/$::' > /etc/sv/bamboo/env/MARATHON_ENDPOINT",
+                  ""
+                ]]},
+                "context" : {
+                  "cluster_id": { "Ref": "ClusterId" },
+                  "bamboo_lb": { "Fn::GetAtt" : [ "ElasticLoadBalancer", "DNSName" ]},
+                  "marathon_url": { "Ref": "MarathonUrl" }
+                },
+                "mode"    : "000755",
+                "owner"   : "root",
+                "group"   : "root"
+              },
+
+              "/etc/cron.d/bamboo": {
+                "content" : { "Fn::Join" : ["\n", [
+                  "# Refresh bamboo config every minute, but don't restart",
+                  "* * * * * root /usr/local/bin/configure-bamboo",
+                  ""
+                ]]},
+                "mode"    : "000644",
+                "owner"   : "root",
+                "group"   : "root"
+              }
+
+            }
+          }
+        }
+      },
+      "Properties" : {
+        "KeyName" : { "Ref" : "KeyName" },
+        "ImageId" : { "Fn::FindInMap" : [ "RegionMap", { "Ref" : "AWS::Region" }, "AMI"] },
+        "SecurityGroups" : [ { "Ref" : "ServerSecurityGroup" }, { "Ref" : "AdminSecurityGroup" }, { "Ref" : "ZkClientSecurityGroup" } ],
+        "AssociatePublicIpAddress": "true",
+        "InstanceType" : { "Ref" : "InstanceType" },
+        "UserData"       : { "Fn::Base64" : { "Fn::Join" : ["", [
+          "#!/bin/bash -ex\n",
+
+          "# Helper function\n",
+          "function error_exit\n",
+          "{\n",
+          "  cfn-signal -e 1 -r \"$1\" '", { "Ref" : "WaitHandle" }, "'\n",
+          "  exit 1\n",
+          "}\n",
+
+          "cfn-init -s ", { "Ref" : "AWS::StackName" }, " -r LaunchConfig ",
+          "    --access-key ",  { "Ref" : "HostKeys" },
+          "    --secret-key ", { "Fn::GetAtt": ["HostKeys", "SecretAccessKey"] },
+          "    --region ", { "Ref" : "AWS::Region" }, " || error_exit 'Failed to run cfn-init'\n",
+
+          "# Set up and run bamboo\n",
+          "docker pull ", { "Ref" : "BambooDockerImage" }, "\n",
+          "runit-service create bamboo 'docker -r=false run ",
+          "   -p 8000:8000",
+          "   -p 80:80",
+          "   -e BAMBOO_ZK_HOST=`cat /etc/sv/bamboo/env/BAMBOO_ZK_HOST`",
+          "   -e BAMBOO_ZK_PATH=`cat /etc/sv/bamboo/env/BAMBOO_ZK_PATH`",
+          "   -e BAMBOO_ENDPOINT=`cat /etc/sv/bamboo/env/BAMBOO_ENDPOINT`",
+          "   -e MARATHON_ENDPOINT=`cat /etc/sv/bamboo/env/MARATHON_ENDPOINT`",
+          "   ", { "Ref" : "BambooDockerImage" },
+          "     -bind=:8000'\n",
+          "runit-service enable bamboo\n",
+
+          "# All is well so signal success\n",
+          "cfn-signal -e 0 -r \"Stack setup complete\" '", { "Ref" : "WaitHandle" }, "'\n",
+
+          "#EOF"
+        ]]}}
+      }
+    },
+
+    "LbSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "bamboo lb",
+        "VpcId" : { "Ref" : "VpcId" },
+        "SecurityGroupIngress" : [ 
+          { "IpProtocol" : "tcp", "FromPort" : "80", "ToPort" : "80", "CidrIp" : "0.0.0.0/0" },
+          { "IpProtocol" : "tcp", "FromPort" : "8000", "ToPort" : "8000", "SourceSecurityGroupId" : { "Ref" : "AdminSecurityGroup"} }
+        ]
+      }
+    },
+
+    "ServerSecurityGroup" : {
+      "Type" : "AWS::EC2::SecurityGroup",
+      "Properties" : {
+        "GroupDescription" : "bamboo server",
+        "VpcId" : { "Ref" : "VpcId" },
+        "SecurityGroupIngress" : [ 
+          { "IpProtocol" : "-1", "FromPort" : "0", "ToPort" : "65535", "SourceSecurityGroupId" : { "Ref" : "LbSecurityGroup"} }
+        ]
+      }
+    },
+
+    "ElasticLoadBalancer" : {
+      "Type" : "AWS::ElasticLoadBalancing::LoadBalancer",
+      "Properties" : {
+        "SecurityGroups": [{ "Ref": "LbSecurityGroup" }, { "Ref" : "AdminSecurityGroup" }],
+        "Subnets": { "Ref": "Subnets" },
+        "Listeners" : [{
+          "LoadBalancerPort" : "80",
+          "Protocol" : "HTTP",
+          "InstancePort" : "80",
+          "InstanceProtocol" : "HTTP"
+        }],
+        "HealthCheck" : {
+          "Target" : "HTTP:8000/",
+          "HealthyThreshold" : "2",
+          "UnhealthyThreshold" : "2",
+          "Interval" : "5",
+          "Timeout" : "3"
+        }
+      }
+    },
+
+    "WaitHandle" : {
+      "Type" : "AWS::CloudFormation::WaitConditionHandle"
+    }
+  },
+
+  "Outputs" : {
+    "BambooEndpoint" : {
+      "Description" : "Bamboo Endpoint",
+      "Value" :  { "Fn::Join" : ["", [
+        "http://", { "Fn::GetAtt" : [ "ElasticLoadBalancer", "DNSName" ]}, ":8000"
+      ]]}
+    }
+  }
+}
