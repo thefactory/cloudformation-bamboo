@@ -57,7 +57,9 @@ If you used the aforementioned template, you can simply copy the stack's outputs
 ### 4. Set up Mesos+Marathon
 You can use the instructions and template at [thefactory/cloudformation-mesos](https://github.com/thefactory/cloudformation-mesos), or you can use an existing cluster.
 
-We'll just need a URL associated with Marathon.
+We'll need:
+* A URL associated with Marathon
+* A security group associated with the Marathon servers (this will be granted access to Bamboo's callback URL)
 
 ### 5. Launch the stack
 Launch the stack via the AWS console, a script, or [aws-cli](https://github.com/aws/aws-cli).
@@ -74,6 +76,7 @@ aws cloudformation create-stack \
         ParameterKey=KeyName,ParameterValue=<key> \
         ParameterKey=ExhibitorDiscoveryUrl,ParameterValue=<url> \
         ParameterKey=ZkClientSecurityGroup,ParameterValue=<sg_id> \
+        ParameterKey=MarathonServerSecurityGroup,ParameterValue=<sg_id> \
         ParameterKey=VpcId,ParameterValue=<vpc_id> \
         ParameterKey=Subnets,ParameterValue='<subnet_id_1>\,<subnet_id_2>' \
         ParameterKey=AdminSecurityGroup,ParameterValue=<sg_id> \

@@ -33,6 +33,10 @@
       "Description" : "Security group ID for ZK clients (should grant access to ZK nodes)",
       "Type" : "String"
     },
+    "MarathonServerSecurityGroup" : {
+      "Description" : "Security group ID for Marathon servers (this will be granted access to Bamboo's callback URL for Marathon events).",
+      "Type" : "String"
+    },
     "BambooDockerImage" : {
       "Description" : "The bamboo Docker image (format: 'registry:port/repository:version')",
       "Type" : "String",
@@ -176,13 +180,12 @@
                   "#!/bin/bash -e",
                   "echo \"`/usr/local/bin/zk-list-nodes`\" > /etc/sv/bamboo/env/BAMBOO_ZK_HOST",
                   "echo \"/{{cluster_id}}_bamboo\" > /etc/sv/bamboo/env/BAMBOO_ZK_PATH",
-                  "echo \"http://{{bamboo_lb}}\" > /etc/sv/bamboo/env/BAMBOO_ENDPOINT",
+                  "echo \"http://`ec2metadata --public-hostname`:8000\" > /etc/sv/bamboo/env/BAMBOO_ENDPOINT",
                   "echo \"{{marathon_url}}\" | sed 's:/$::' > /etc/sv/bamboo/env/MARATHON_ENDPOINT",
                   ""
                 ]]},
                 "context" : {
                   "cluster_id": { "Ref": "ClusterId" },
-                  "bamboo_lb": { "Fn::GetAtt" : [ "ElasticLoadBalancer", "DNSName" ]},
                   "marathon_url": { "Ref": "MarathonUrl" }
                 },
                 "mode"    : "000755",
@@ -265,7 +268,8 @@
         "GroupDescription" : "bamboo server",
         "VpcId" : { "Ref" : "VpcId" },
         "SecurityGroupIngress" : [ 
-          { "IpProtocol" : "-1", "FromPort" : "0", "ToPort" : "65535", "SourceSecurityGroupId" : { "Ref" : "LbSecurityGroup"} }
+          { "IpProtocol" : "-1", "FromPort" : "0", "ToPort" : "65535", "SourceSecurityGroupId" : { "Ref" : "LbSecurityGroup"} },
+          { "IpProtocol" : "tcp", "FromPort" : "8000", "ToPort" : "8000", "SourceSecurityGroupId" : { "Ref" : "MarathonServerSecurityGroup"} }
         ]
       }
     },
