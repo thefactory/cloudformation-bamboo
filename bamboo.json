@@ -361,6 +361,17 @@
       }
     },
 
+    "BambooToMarathonIngress" : {
+      "Type" : "AWS::EC2::SecurityGroupIngress",
+      "Properties" : {
+        "GroupId" : { "Ref" : "ServerSecurityGroup" },
+        "IpProtocol" : "tcp",
+        "FromPort" : "8080",
+        "ToPort" : "8080",
+        "SourceSecurityGroupId" : { "Ref" : "MarathonServerSecurityGroup" }
+      }
+    },
+
     "ElasticLoadBalancer" : {
       "Type" : "AWS::ElasticLoadBalancing::LoadBalancer",
       "Properties" : {
