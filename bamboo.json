@@ -384,7 +384,7 @@
           "InstanceProtocol" : "HTTP"
         }],
         "HealthCheck" : {
-          "Target" : "HTTP:8000/",
+          "Target" : "HTTP:8000/status",
           "HealthyThreshold" : "2",
           "UnhealthyThreshold" : "2",
           "Interval" : "5",
