@@ -46,7 +46,7 @@
     "BambooDockerImage" : {
       "Description" : "The bamboo Docker image (format: 'registry:port/repository:version')",
       "Type" : "String",
-      "Default" : "thefactory/bamboo:0.2.4"
+      "Default" : "mbabineau/bamboo:0.2.9"
     },    
     "InstanceCount" : {
       "Description" : "Number of bamboo nodes to launch",
